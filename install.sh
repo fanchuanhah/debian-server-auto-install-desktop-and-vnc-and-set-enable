@@ -1,7 +1,8 @@
 #!/bin/bash
 # ==================================================
 # Ubuntu 桌面环境一键安装脚本（多桌面 + VNC + noVNC + 应用安装）
-# 版本: 0.1-bete
+# 版本: 0.2-fixed
+# 修复内容: 自动安装 Fcitx5 输入法，VNC xstartup 使用用户定制模板
 # ==================================================
 
 AUTO_DESKTOP_TYPE="xfce4"
@@ -17,7 +18,7 @@ AUTO_VNC_PASSWORD="123456"
 AUTO_VNC_START_NOW="y"
 AUTO_INSTALL_LANG="y"
 AUTO_INSTALL_NOVNC="y"
-AUTO_NOVNC_PORT="6080"                     # 新增：noVNC 默认端口
+AUTO_NOVNC_PORT="6080"
 
 RED='\033[1;31m'
 GREEN='\033[1;32m'
@@ -208,7 +209,6 @@ check_lockfile() {
     fi
 }
 
-# 读取锁文件（使用sed提高兼容性）
 read_lockfile() {
     if [[ ! -f "$LOCKFILE" ]]; then
         return 1
@@ -244,7 +244,6 @@ get_public_ip() {
     curl -s --max-time 2 ifconfig.me || curl -s --max-time 2 icanhazip.com || echo "无法获取公网IP"
 }
 
-# ========== 自动检测已有锁文件（始终提示选择） ==========
 detect_existing_lockfile() {
     local locks=()
     if [[ -f "/root/vncinstall.lock" ]]; then
@@ -288,9 +287,7 @@ detect_existing_lockfile() {
     fi
 }
 
-# ========== 用户权限设置（若已指定用户则跳过） ==========
 setup_user_permissions() {
-    # 如果已经通过锁文件指定了用户，直接使用，不再交互
     if [[ -n "$TARGET_USER" ]]; then
         print_info "已指定用户: $TARGET_USER，跳过用户选择"
         if [[ -z "$TARGET_HOME" ]]; then
@@ -428,7 +425,6 @@ setup_user_permissions() {
     return 0
 }
 
-# ========== 通用桌面快捷方式创建函数 ==========
 create_app_desktop() {
     local app_name="$1"
     local source_desktop="$2"
@@ -444,7 +440,6 @@ create_app_desktop() {
         return
     fi
     
-    # 确保桌面目录存在
     if [[ "$TARGET_USER" == "root" ]]; then
         mkdir -p "$desktop_dir"
     else
@@ -463,7 +458,6 @@ create_app_desktop() {
         return
     fi
     
-    # 为 root 用户的浏览器类应用添加 --no-sandbox
     if [[ "$TARGET_USER" == "root" && "$app_name" =~ (Chrome|Edge|Firefox|Cursor) ]]; then
         sed -i '/^Exec=/ s/$/ --no-sandbox/' "$target_path"
         print_info "为 root 用户的 $app_name 添加 --no-sandbox 启动参数"
@@ -474,7 +468,6 @@ create_app_desktop() {
     print_success "已创建 $app_name 桌面快捷方式"
 }
 
-# ========== 浏览器仓库管理 ==========
 add_browser_repo() {
     local browser="$1"
     local keyring_dir="/etc/apt/keyrings"
@@ -512,7 +505,6 @@ remove_browser_repo() {
     esac
 }
 
-# ========== 浏览器安装 ==========
 install_browser_google() {
     print_info "安装 Google Chrome..."
     add_browser_repo "google"
@@ -532,7 +524,6 @@ install_browser_firefox() {
     run_cmd "add-apt-repository -y ppa:mozillateam/ppa"
     run_cmd "apt update"
     run_cmd "apt install -y firefox-esr"
-    # 优先使用 firefox-esr.desktop，若无则使用 firefox.desktop
     if [[ -f "/usr/share/applications/firefox-esr.desktop" ]]; then
         create_app_desktop "Firefox" "/usr/share/applications/firefox-esr.desktop" "firefox.desktop"
     else
@@ -540,7 +531,6 @@ install_browser_firefox() {
     fi
 }
 
-# ========== 基础安装 ==========
 install_base() {
     print_info "更新系统并安装基础软件包..."
     run_cmd "DEBIAN_FRONTEND=noninteractive apt update"
@@ -616,11 +606,9 @@ install_desktop() {
     esac
     run_cmd "apt-get install -y dbus-x11"
 
-    # 检测并选择可用的桌面启动命令（兼容不同发行版/版本）
     if command -v "$DESKTOP_CMD" >/dev/null 2>&1; then
         :
     else
-        # KDE Plasma 可能有不同的启动命令
         if command -v startplasma-x11 >/dev/null 2>&1; then
             DESKTOP_CMD="startplasma-x11"
         elif command -v startplasma-wayland >/dev/null 2>&1; then
@@ -647,7 +635,6 @@ install_desktop() {
     fi
 }
 
-# ========== 应用安装函数（附带快捷方式） ==========
 install_qq() {
     print_info "安装 QQ..."
     local url="https://dldir1v6.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.25_260205_amd64_01.deb"
@@ -656,7 +643,6 @@ install_qq() {
     run_cmd "dpkg -i $deb_file"
     run_cmd "apt --fix-broken install -y"
     run_cmd "rm -f $deb_file"
-    # 创建快捷方式
     if [[ -f "/usr/share/applications/qq.desktop" ]]; then
         create_app_desktop "QQ" "/usr/share/applications/qq.desktop"
     elif [[ -f "/usr/share/applications/QQ.desktop" ]]; then
@@ -677,7 +663,6 @@ install_wechat() {
     run_cmd "dpkg -i $deb_file"
     run_cmd "apt --fix-broken install -y"
     run_cmd "rm -f $deb_file"
-    # 创建快捷方式
     local desktop_path=""
     if [[ -f "/usr/share/applications/wechat.desktop" ]]; then
         desktop_path="/usr/share/applications/wechat.desktop"
@@ -687,7 +672,6 @@ install_wechat() {
 
     if [[ -n "$desktop_path" ]]; then
         create_app_desktop "微信" "$desktop_path"
-        # 从 .desktop 中提取 Exec 并创建 /usr/bin/wechat 启动脚本
         local exec_cmd
         exec_cmd=$(grep -m1 '^Exec=' "$desktop_path" | sed 's/^Exec=//; s/ %.\+//; s/ %U//; s/ %u//') || true
         if [[ -n "$exec_cmd" ]]; then
@@ -712,14 +696,12 @@ install_finalshell() {
     run_cmd "dpkg -i $deb_file"
     run_cmd "apt --fix-broken install -y"
     run_cmd "rm -f $deb_file"
-    # 创建快捷方式
     if [[ -f "/usr/share/applications/finalshell.desktop" ]]; then
         create_app_desktop "FinalShell" "/usr/share/applications/finalshell.desktop"
     else
         print_warn "未找到 FinalShell 的桌面文件，跳过创建快捷方式"
     fi
 
-    # 如果安装目录存在，创建 /usr/bin/FinalShell 快捷脚本
     if [[ -x "/usr/lib/finalshell/bin/FinalShell" ]]; then
         cat > /usr/bin/FinalShell <<'EOF'
 #!/bin/bash
@@ -737,7 +719,6 @@ install_cursor() {
     run_cmd "echo 'deb [arch=amd64,arm64 signed-by=/etc/apt/keyrings/cursor.gpg] https://downloads.cursor.com/aptrepo stable main' | tee /etc/apt/sources.list.d/cursor.list > /dev/null"
     run_cmd "apt update"
     run_cmd "apt install -y cursor"
-    # 创建快捷方式
     if [[ -f "/usr/share/applications/cursor.desktop" ]]; then
         create_app_desktop "Cursor" "/usr/share/applications/cursor.desktop"
     else
@@ -754,7 +735,6 @@ install_realvnc_viewer() {
     run_cmd "dpkg -i $deb_file"
     run_cmd "apt --fix-broken install -y"
     run_cmd "rm -f $deb_file"
-    # 创建快捷方式
     if [[ -f "/usr/share/applications/realvnc-vncviewer.desktop" ]]; then
         create_app_desktop "RealVNC Viewer" "/usr/share/applications/realvnc-vncviewer.desktop"
     elif [[ -f "/usr/share/applications/vncviewer.desktop" ]]; then
@@ -789,7 +769,6 @@ install_ibus() {
         echo 'ibus-daemon -drx' >> "$profile_file"
     fi
     
-    # 配置中文环境变量到用户bashrc
     configure_chinese_locale_for_user
     
     print_success "IBus 安装完成"
@@ -799,7 +778,6 @@ install_fcitx5() {
     print_info "安装 Fcitx5 中文输入法..."
     run_cmd "apt install -y fcitx5 fcitx5-chinese-addons fcitx5-config-qt"
     
-    # 配置中文环境变量到用户bashrc
     configure_chinese_locale_for_user
     
     print_success "Fcitx5 安装完成"
@@ -856,7 +834,6 @@ install_sys_tools() { run_cmd "apt install -y neofetch htop tmux"; }
 install_common_soft() {
     run_cmd "apt install -y gedit mousepad ristretto"
     run_cmd "apt install -y gnome-disk-utility gnome-system-monitor"
-    # 为这些轻量应用创建快捷方式（如果存在）
     [[ -f "/usr/share/applications/gedit.desktop" ]] && create_app_desktop "Gedit" "/usr/share/applications/gedit.desktop"
     [[ -f "/usr/share/applications/mousepad.desktop" ]] && create_app_desktop "Mousepad" "/usr/share/applications/mousepad.desktop"
     [[ -f "/usr/share/applications/ristretto.desktop" ]] && create_app_desktop "Ristretto" "/usr/share/applications/ristretto.desktop"
@@ -864,51 +841,48 @@ install_common_soft() {
     [[ -f "/usr/share/applications/gnome-system-monitor.desktop" ]] && create_app_desktop "系统监视器" "/usr/share/applications/gnome-system-monitor.desktop"
 }
 
-# ========== VNC 安装 ==========
+# ========== 关键修改：install_vnc 函数使用用户提供的 xstartup 模板 ==========
 install_vnc() {
     print_title "安装 TigerVNC"
     run_cmd "apt install -y tigervnc-standalone-server tigervnc-xorg-extension"
     run_cmd "mkdir -p $TARGET_HOME/.vnc/"
     
     local xstartup_path="$TARGET_HOME/.vnc/xstartup"
-    run_cmd "touch $xstartup_path"
     
-    # 选择可用桌面启动命令
-    local start_cmd="${DESKTOP_CMD:-}"
-    if [[ -z "$start_cmd" ]]; then
-        if command -v startxfce4 >/dev/null 2>&1; then
-            start_cmd="startxfce4"
-        elif command -v startplasma-x11 >/dev/null 2>&1; then
-            start_cmd="startplasma-x11"
-        elif command -v startkde >/dev/null 2>&1; then
-            start_cmd="startkde"
-        elif command -v mate-session >/dev/null 2>&1; then
-            start_cmd="mate-session"
-        elif command -v startlxqt >/dev/null 2>&1; then
-            start_cmd="startlxqt"
-        elif command -v gnome-session >/dev/null 2>&1; then
-            start_cmd="gnome-session"
-        elif command -v lxsession >/dev/null 2>&1; then
-            start_cmd="lxsession"
-        elif command -v cinnamon-session >/dev/null 2>&1; then
-            start_cmd="cinnamon-session"
-        elif command -v startdde >/dev/null 2>&1; then
-            start_cmd="startdde"
-        elif command -v ukui-session >/dev/null 2>&1; then
-            start_cmd="ukui-session"
-        else
-            start_cmd="startxfce4"
-        fi
-    fi
-    
-    # 根据所选桌面生成 xstartup
-    cat > /tmp/xstartup.tmp <<EOF
-#!/usr/bin/env bash
+    # 生成 xstartup 内容（按照用户提供的模板）
+    cat > /tmp/xstartup.tmp <<'EOF'
+#!/bin/bash
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
-x-terminal-emulator &
-exec dbus-launch $start_cmd
+
+# Set Chinese locale
+export LANG=zh_CN.UTF-8
+export LC_ALL=zh_CN.UTF-8
+
+# Disable screen saver and power management
+xset s off
+xset -dpms
+xset s noblank
+
+# Start XFCE desktop
+startxfce4 &
+
+# Wait for XFCE to start
+sleep 5
+
+# Start input method if available
+if command -v fcitx5 >/dev/null 2>&1; then
+    export INPUT_METHOD=fcitx5
+    export GTK_IM_MODULE=fcitx5
+    export QT_IM_MODULE=fcitx5
+    export XMODIFIERS="@im=fcitx5"
+    fcitx5 &
+fi
+
+# Keep the session running
+exec sleep infinity
 EOF
+
     if is_root || [[ "$TARGET_USER" == "root" ]]; then
         cp /tmp/xstartup.tmp "$xstartup_path"
     else
@@ -918,7 +892,7 @@ EOF
     run_cmd "chmod +x $xstartup_path"
     run_cmd "chown -R $TARGET_USER:$TARGET_USER $TARGET_HOME/.vnc/"
     
-    # 设置 VNC 密码（直接以目标用户身份执行）
+    # 设置 VNC 密码
     if [[ -n "$VNC_PASSWORD" ]]; then
         print_info "设置 VNC 密码..."
         if [[ "$TARGET_USER" == "root" ]]; then
@@ -992,7 +966,6 @@ EOF
     rm /tmp/locale.tmp
 }
 
-# ========== noVNC 安装（支持自定义端口） ==========
 install_novnc() {
     print_info "安装 noVNC..."
     local display_num=$(port_to_display $VNC_PORT)
@@ -1064,11 +1037,9 @@ uninstall_all_apps() {
     read -p "按回车键返回主菜单..." -r
 }
 
-# ========== 独立应用安装菜单 ==========
 install_apps_menu() {
     print_title "独立应用安装"
 
-    # 如果未指定目标用户，尝试检测或让用户选择
     if [[ -z "$TARGET_USER" ]]; then
         print_warn "未指定目标用户，请选择要安装应用的用户。"
         local users=($(awk -F: '$3>=1000 && $1!="nobody" {print $1}' /etc/passwd))
@@ -1160,7 +1131,6 @@ install_apps_menu() {
     read -p "按回车键返回主菜单..." -r
 }
 
-# ========== 应用批量管理菜单 ==========
 app_batch_menu() {
     print_title "应用批量管理"
     echo "1) 安装全部应用"
@@ -1175,7 +1145,7 @@ app_batch_menu() {
     esac
 }
 
-# ========== 自动安装（简化版，强制 root，自动重启） ==========
+# ========== 自动安装（强制 root，自动重启）已添加输入法 ==========
 auto_install() {
     print_title "自动安装模式"
     reset_question_stack
@@ -1186,7 +1156,6 @@ auto_install() {
     LOCKFILE="/root/vncinstall.lock"
     export TARGET_USER TARGET_HOME LOCKFILE
 
-    # 检查锁文件并询问（仅一次确认）
     if check_lockfile; then
         print_warn "检测到锁文件，系统可能已安装过桌面环境。"
         confirm_action "是否继续安装（将覆盖原有配置）" "confirm_auto_install"
@@ -1231,6 +1200,8 @@ auto_install() {
     [[ "$INSTALL_COMMON_SOFT" == "y" ]] && install_common_soft
     [[ "$INSTALL_VNC" == "y" ]] && install_vnc
     [[ "$INSTALL_LANG" == "y" ]] && install_language
+    # 自动安装默认安装 Fcitx5 输入法（关键修复）
+    install_fcitx5
     [[ "$INSTALL_NOVNC" == "y" ]] && install_novnc
 
     generate_lockfile
@@ -1264,7 +1235,6 @@ auto_install_summary() {
     run_cmd "reboot"
 }
 
-# ========== 高级安装 ==========
 advanced_install() {
     print_title "高级安装模式"
     reset_question_stack
@@ -1379,8 +1349,6 @@ advanced_install() {
                 current_state="common_soft"
                 STATE_STACK+=("$current_state")
                 ;;
-                
-                
                 
             "common_soft")
                 ask_yes_no "是否安装常用软件" "install_common_soft"
@@ -1508,7 +1476,6 @@ advanced_install() {
                 else
                     INSTALL_LANG="n"
                 fi
-                # 询问中文输入法（放在语言包询问之后）
                 current_state="input_method_choice"
                 STATE_STACK+=("$current_state")
                 ;;
@@ -1548,7 +1515,6 @@ advanced_install() {
                         continue
                     elif [[ $res -eq 0 ]]; then
                         INSTALL_NOVNC="y"
-                        # 高级安装中 noVNC 端口使用默认 6080，暂不提供自定义
                         NOVNC_PORT="${NOVNC_PORT:-6080}"
                     else
                         INSTALL_NOVNC="n"
@@ -1578,9 +1544,7 @@ advanced_install() {
                     fi
                 fi
                 [[ "$INSTALL_COMMON_SOFT" == "y" ]] && install_common_soft
-                # 在启动 VNC 前，将选择的输入法传递给 VNC xstartup 生成逻辑
                 if [[ "$INSTALL_VNC" == "y" ]]; then
-                    SELECTED_INPUT_METHOD="${INPUT_METHOD_TYPE:-fcitx5}"
                     install_vnc
                 fi
                 [[ "$INSTALL_LANG" == "y" ]] && install_language
@@ -1594,7 +1558,6 @@ advanced_install() {
     done
 }
 
-# ========== 普通安装总结 ==========
 show_install_summary() {
     print_title "安装完成信息汇总"
     echo -e "${GREEN}[成功] 安装完成！${NC}"
@@ -1643,7 +1606,6 @@ show_install_summary() {
     esac
 }
 
-# ========== 卸载管理 ==========
 uninstall_management() {
     print_title "卸载管理"
     reset_question_stack
@@ -1865,7 +1827,6 @@ uninstall_management() {
     read -p "按回车键返回主菜单..." -r
 }
 
-# ========== 服务管理 ==========
 service_management() {
     print_title "服务管理"
     reset_question_stack
@@ -1968,9 +1929,7 @@ service_management() {
     read -p "按回车键返回主菜单..." -r
 }
 
-# ========== 主菜单（根据锁文件状态动态显示） ==========
 main_menu() {
-    # 每次进入主菜单前检测锁文件状态（更新 INSTALLED 标志）
     if [[ -n "$LOCKFILE" && -f "$LOCKFILE" ]]; then
         INSTALLED=true
     else
@@ -2037,13 +1996,11 @@ main_menu() {
     done
 }
 
-# ========== 脚本入口 ==========
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     if ! is_root && ! has_sudo; then
         print_error "当前用户无 sudo 权限"
         exit 1
     fi
-    # 启动时自动检测锁文件
     detect_existing_lockfile
     main_menu
 fi
